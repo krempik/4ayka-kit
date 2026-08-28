@@ -1,0 +1,28 @@
+# 4ayka-kit example: Notes
+# Generate with: ayka gen -s spec.yaml  (then: python run.py)
+project:
+  name: notes
+  title: Notes
+  auth: jwt
+
+resources:
+  notes:
+    fields:
+      title: str
+      body: text
+      tags: list[str]
+    search: [title, body]
+    crud: full
+
+  public_links:
+    fields:
+      url: str
+      label: str
+    crud: read
+    public: true
+
+  events:
+    fields:
+      kind: str
+      at: datetime
+    crud: create
