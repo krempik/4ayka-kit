@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/krempik"
+Homepage = "https://github.com/krempik/4ayka-kit"
 
 [project.scripts]
 ayka = "ayka.cli:main"
