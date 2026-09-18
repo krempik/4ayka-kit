@@ -3,7 +3,7 @@
 Spec-driven FastAPI codegen + project context scanner + reusable building blocks.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 APP = "ayka"
 BANNER = """
      _    _   __ _    _    ___ _  __

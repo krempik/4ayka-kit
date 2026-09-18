@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Optional
 
 _PKG_FILE = Path(__file__).resolve().parent / "__init__.py"
+_PYPROJECT_FILE = _PKG_FILE.parent.parent / "pyproject.toml"
 _VERSION_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
+_PYPROJECT_RE = re.compile(r'^(version\s*=\s*["\'])[^"\']+(["\'])$', re.M)
 
 
 def bump(version: str, bump_type: str) -> str:
@@ -44,11 +46,15 @@ def current_version() -> str:
 
 
 def bump_version(bump_type: str) -> str:
-    """Bump ayka-kit's own __version__ in place; returns the new version."""
+    """Bump ayka-kit's own version in __init__.py and pyproject.toml in sync."""
     new = bump(current_version(), bump_type)
     text = _PKG_FILE.read_text(encoding="utf-8")
     text = _VERSION_RE.sub(f'__version__ = "{new}"', text, count=1)
     _PKG_FILE.write_text(text, encoding="utf-8")
+    if _PYPROJECT_FILE.is_file():
+        py = _PYPROJECT_FILE.read_text(encoding="utf-8")
+        if _PYPROJECT_RE.search(py):
+            _PYPROJECT_FILE.write_text(_PYPROJECT_RE.sub(fr"\g<1>{new}\g<2>", py, count=1), encoding="utf-8")
     return new
 
 

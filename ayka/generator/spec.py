@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import re
+
 import yaml
 
 DEFAULT_CRUD = "full"
@@ -30,6 +32,11 @@ FIELD_TYPES = {
     "list[str]": "list",
     "password": "password",
 }
+
+# Identifiers are spliced verbatim into generated Python (class/attr/route
+# names) and table/route paths, so they must be strict valid identifiers.
+_RESOURCE_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 CRUD_MODES = {"full", "read", "write", "create", "none"}
 
@@ -93,6 +100,20 @@ class ProjectSpec:
         return self.name.replace("-", "_")
 
 
+def _check_resource_name(name: str) -> str:
+    if not _RESOURCE_RE.match(name):
+        raise ValueError(f"Invalid resource name {name!r}: use lowercase letters, digits, '-' and '_' only")
+    return name
+
+
+def _check_field_name(name: str) -> str:
+    if not _FIELD_RE.match(name):
+        raise ValueError(f"Invalid field name {name!r}: use lowercase letters, digits and '_' only")
+    if name in ("id", "owner_id", "created_at", "updated_at"):
+        raise ValueError(f"Field name {name!r} is reserved")
+    return name
+
+
 def _field_list(field_def) -> List[FieldSpec]:
     result = []
     if isinstance(field_def, dict):
@@ -101,12 +122,12 @@ def _field_list(field_def) -> List[FieldSpec]:
         result = []
         for f in field_def:
             if isinstance(f, dict):
-                result.append(FieldSpec(**{"name": str(next(iter(f))), "type": str(f[next(iter(f))])}))
+                result.append(FieldSpec(**{"name": _check_field_name(str(next(iter(f)))), "type": str(f[next(iter(f))])}))
             elif isinstance(f, str) and ":" in f:
                 name, typ = f.split(":", 1)
-                result.append(FieldSpec(name=name.strip(), type=typ.strip()))
+                result.append(FieldSpec(name=_check_field_name(name.strip()), type=typ.strip()))
             elif isinstance(f, str):
-                result.append(FieldSpec(name=f.strip(), type="str"))
+                result.append(FieldSpec(name=_check_field_name(f.strip()), type="str"))
             else:
                 raise ValueError(f"Bad field entry: {f!r}")
         for spec in result:
@@ -120,7 +141,7 @@ def _field_list(field_def) -> List[FieldSpec]:
     for name, typ in items:
         if isinstance(typ, (list, dict)):
             typ = "list[str]"
-        name = str(name).strip()
+        name = _check_field_name(str(name).strip())
         typ = str(typ).strip()
         if typ not in FIELD_TYPES:
             raise ValueError(f"Unsupported field type '{typ}' for '{name}'. "
@@ -133,11 +154,14 @@ def load_project(data: dict) -> ProjectSpec:
     project = data.get("project") or {}
     if isinstance(project, str):
         project = {"name": project}
+    name = str(project.get("name", "app")).strip().lower()
+    if not _RESOURCE_RE.match(name):
+        raise ValueError(f"Invalid project name {name!r}: use lowercase letters, digits, '-' and '_' only")
     spec = ProjectSpec(
-        name=str(project.get("name", "app")).strip().lower(),
+        name=name,
         title=str(project.get("title") or project.get("name") or "App"),
         auth=bool(project.get("auth", project.get("auth", False))),
-        db_file=str(project.get("db", "data/" + str(project.get("name", "app")).strip().lower() + ".db")),
+        db_file=str(project.get("db", "data/" + name + ".db")),
     )
     if project.get("auth") in (True, "jwt", "true"):
         spec.auth = True
@@ -146,12 +170,17 @@ def load_project(data: dict) -> ProjectSpec:
         if isinstance(cfg, list):
             cfg = {"fields": cfg}
         cfg = cfg or {}
-        res = ResourceSpec(name=str(name).strip().lower())
+        res_name = _check_resource_name(str(name).strip().lower())
+        res = ResourceSpec(name=res_name)
         res.fields = _field_list(cfg.get("fields", []))
         crud = str(cfg.get("crud", DEFAULT_CRUD)).lower()
         res.crud = crud if crud in CRUD_MODES else DEFAULT_CRUD
         search = cfg.get("search", [])
+        field_names = {f.name for f in res.fields}
         res.search = [search] if isinstance(search, str) else [s for s in (search or [])]
+        for s in res.search:
+            if s not in field_names:
+                raise ValueError(f"search field {s!r} does not exist in resource {res_name!r}")
         res.public = bool(cfg.get("public", False))
         spec.resources[res.name] = res
     return spec

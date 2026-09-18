@@ -38,7 +38,7 @@ def cmd_gen(args) -> int:
         print(f"spec not found: {spec_path}", file=sys.stderr)
         return 1
     spec = load_spec(spec_path)
-    target = Path(args.target) or spec_path.parent
+    target = Path(args.target) if args.target else spec_path.parent
     written = generate(spec, target)
     print(f"generated {len(written)} files for '{spec.name}' in {target}")
     return 0
@@ -46,7 +46,7 @@ def cmd_gen(args) -> int:
 
 def cmd_new(args) -> int:
     name = args.name
-    target = Path(args.target) or Path(name)
+    target = Path(args.target) if args.target else Path(name)
     if args.template not in TEMPLATES:
         print(f"unknown template '{args.template}'. Available: {', '.join(TEMPLATES)}", file=sys.stderr)
         return 1

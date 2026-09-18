@@ -180,7 +180,8 @@ def _out_fields(res: ResourceSpec, spec: ProjectSpec) -> List[str]:
     if spec.auth and not res.public:
         out.append("    owner_id: Optional[int] = None")
     for f in res.fields:
-        if f.name in ("id", "owner_id"):
+        # password is write-only input: its stored value must never leak out
+        if f.name in ("id", "owner_id") or f.kind == "password":
             continue
         typ = _PYD[f.kind]
         out.append(f"    {f.name}: Optional[{typ}] = None")
@@ -221,7 +222,7 @@ from pydantic import BaseModel, ConfigDict
             else:
                 fields = []
                 for f in res.fields:
-                    if f.name in ("id", "owner_id", "created_at", "updated_at"):
+                    if f.name in ("id", "owner_id", "created_at", "updated_at") or f.kind == "password":
                         continue
                     typ = _PYD[f.kind]
                     fields.append(f"    {f.name}: Optional[{typ}] = None")

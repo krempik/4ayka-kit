@@ -201,6 +201,41 @@ def test_generated_ci_and_readme_exist(tmp_path):
     assert "/api/notes" in readme
 
 
+def test_generated_schemas_never_leak_password_fields(tmp_path):
+    spec_text = """\
+    project: {name: vault, title: Vault, auth: jwt}
+    resources:
+      secrets:
+        fields: {label: str, secret_value: password}
+        crud: full
+    """
+    (tmp_path / "spec.yaml").write_text(textwrap.dedent(spec_text), encoding="utf-8")
+    spec = load_spec(tmp_path / "spec.yaml")
+    generate(spec, tmp_path)
+    schemas = (tmp_path / "app" / "schemas.py").read_text(encoding="utf-8")
+    # password appears only in the Create input schema
+    assert "secret_value: str" in schemas.split("class SecretsUpdate")[0]
+    assert schemas.split("class SecretsUpdate")[1].count("secret_value") == 0
+
+
+def test_spec_rejects_hostile_identifiers(tmp_path):
+    import pytest
+    from ayka.generator.spec import load_spec
+
+    cases = [
+        ("project: {name: 'notes; import os'}\nresources:\n  notes:\n    fields: {title: str}",
+         "hostile project name"),
+        ("project: {name: notes}\nresources:\n  notes:\n    fields: {title = Column(Integer); import os: str}",
+         "hostile field name"),
+        ("project: {name: notes}\nresources:\n  notes:\n    fields: {title: str}\n    search: [missing_field]",
+         "search field that does not exist"),
+    ]
+    for spec_text, _label in cases:
+        (tmp_path / "bad.yaml").write_text(textwrap.dedent(spec_text), encoding="utf-8")
+        with pytest.raises(ValueError):
+            load_spec(tmp_path / "bad.yaml")
+
+
 def test_generated_tests_respect_crud_modes(tmp_path):
     (tmp_path / "spec.yaml").write_text(textwrap.dedent(SPEC), encoding="utf-8")
     spec = load_spec(tmp_path / "spec.yaml")
