@@ -58,7 +58,8 @@ class JwtAuth:
         if self.secret_file:
             try:
                 if os.path.isfile(self.secret_file):
-                    val = open(self.secret_file, "r", encoding="utf-8").read().strip()
+                    with open(self.secret_file, "r", encoding="utf-8") as f:
+                        val = f.read().strip()
                     if val:
                         self._secret = val
                         return val
@@ -66,10 +67,13 @@ class JwtAuth:
                 os.makedirs(os.path.dirname(os.path.abspath(self.secret_file)), exist_ok=True)
                 with open(self.secret_file, "w", encoding="utf-8") as f:
                     f.write(val)
-                self._secret = val
-                return val
-            except Exception:
-                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Could not read or write secret file {self.secret_file!r} ({exc}). "
+                    f"Set env {self.secret_env} to provide the secret explicitly."
+                ) from exc
+            self._secret = val
+            return val
         val = os.urandom(32).hex()
         self._secret = val
         return val
@@ -113,6 +117,9 @@ class JwtAuth:
         except JWTError:
             return None
         if refresh and payload.get("type") != "refresh":
+            return None
+        # A refresh token must never double as an access token.
+        if not refresh and payload.get("type") == "refresh":
             return None
         return payload
 

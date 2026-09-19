@@ -74,83 +74,82 @@ def test_generate_writes_all_files(tmp_path):
 
 def test_full_generated_app_lifecycle(tmp_path):
     spec, main_mod = _build(tmp_path)
-    client = TestClient(main_mod.app)
+    with TestClient(main_mod.app) as client:
+        # health + version
+        assert client.get("/api/health").status_code == 200
+        v = client.get("/api/version").json()
+        assert v["name"] == "notes"
+        assert v["version"]
 
-    # health + version
-    assert client.get("/api/health").status_code == 200
-    v = client.get("/api/version").json()
-    assert v["name"] == "notes"
-    assert v["version"]
+        # register two users
+        r1 = client.post("/api/auth/register",
+                         json={"username": "alice", "password": "supersecret", "display_name": "Alice"})
+        assert r1.status_code == 201, r1.text
+        t1 = r1.json()["access_token"]
+        h1 = {"Authorization": "Bearer " + t1}
+        alice_id = client.get("/api/auth/me", headers=h1).json()["id"]
 
-    # register two users
-    r1 = client.post("/api/auth/register",
-                     json={"username": "alice", "password": "supersecret", "display_name": "Alice"})
-    assert r1.status_code == 201, r1.text
-    t1 = r1.json()["access_token"]
-    h1 = {"Authorization": "Bearer " + t1}
-    alice_id = client.get("/api/auth/me", headers=h1).json()["id"]
+        r2 = client.post("/api/auth/register", json={"username": "bob", "password": "supersecret2"})
+        assert r2.status_code == 201, r2.text
+        h2 = {"Authorization": "Bearer " + r2.json()["access_token"]}
 
-    r2 = client.post("/api/auth/register", json={"username": "bob", "password": "supersecret2"})
-    assert r2.status_code == 201, r2.text
-    h2 = {"Authorization": "Bearer " + r2.json()["access_token"]}
+        # duplicate username -> 409
+        dup = client.post("/api/auth/register", json={"username": "alice", "password": "whatever123"})
+        assert dup.status_code == 409
 
-    # duplicate username -> 409
-    dup = client.post("/api/auth/register", json={"username": "alice", "password": "whatever123"})
-    assert dup.status_code == 409
+        # unauthenticated create -> 401
+        assert client.post("/api/notes", json={"title": "x", "body": "y"}).status_code == 401
 
-    # unauthenticated create -> 401
-    assert client.post("/api/notes", json={"title": "x", "body": "y"}).status_code == 401
+        # create note as alice
+        r = client.post("/api/notes", headers=h1, json={"title": "hello", "body": "world", "tags": ["a", "b"]})
+        assert r.status_code == 201, r.text
+        note = r.json()
+        nid = note["id"]
+        assert note["owner_id"] == alice_id
+        assert note["tags"] == ["a", "b"]
 
-    # create note as alice
-    r = client.post("/api/notes", headers=h1, json={"title": "hello", "body": "world", "tags": ["a", "b"]})
-    assert r.status_code == 201, r.text
-    note = r.json()
-    nid = note["id"]
-    assert note["owner_id"] == alice_id
-    assert note["tags"] == ["a", "b"]
+        # owner can list and search
+        assert len(client.get("/api/notes", headers=h1).json()) == 1
+        found = client.get("/api/notes?q=world", headers=h1).json()
+        assert len(found) == 1 and found[0]["id"] == nid
 
-    # owner can list and search
-    assert len(client.get("/api/notes", headers=h1).json()) == 1
-    found = client.get("/api/notes?q=world", headers=h1).json()
-    assert len(found) == 1 and found[0]["id"] == nid
+        # owner isolation
+        assert client.get("/api/notes", headers=h2).json() == []
+        assert client.get(f"/api/notes/{nid}", headers=h2).status_code == 404
+        assert client.put(f"/api/notes/{nid}", headers=h2, json={"title": "hacked"}).status_code == 404
+        assert client.delete(f"/api/notes/{nid}", headers=h2).status_code == 404
 
-    # owner isolation
-    assert client.get("/api/notes", headers=h2).json() == []
-    assert client.get(f"/api/notes/{nid}", headers=h2).status_code == 404
-    assert client.put(f"/api/notes/{nid}", headers=h2, json={"title": "hacked"}).status_code == 404
-    assert client.delete(f"/api/notes/{nid}", headers=h2).status_code == 404
+        # update + partial update
+        u = client.put(f"/api/notes/{nid}", headers=h1, json={"body": "updated"})
+        assert u.status_code == 200
+        assert u.json()["body"] == "updated"
+        assert u.json()["title"] == "hello"  # untouched field survives
 
-    # update + partial update
-    u = client.put(f"/api/notes/{nid}", headers=h1, json={"body": "updated"})
-    assert u.status_code == 200
-    assert u.json()["body"] == "updated"
-    assert u.json()["title"] == "hello"  # untouched field survives
+        # delete
+        assert client.delete(f"/api/notes/{nid}", headers=h1).status_code == 204
+        assert client.get("/api/notes", headers=h1).json() == []
 
-    # delete
-    assert client.delete(f"/api/notes/{nid}", headers=h1).status_code == 204
-    assert client.get("/api/notes", headers=h1).json() == []
+        # public read-only resource: readable anonymously, no POST route
+        assert client.get("/api/public_links").json() == []
+        assert client.post("/api/public_links", json={"url": "https://x.test", "label": "x"}).status_code == 405
 
-    # public read-only resource: readable anonymously, no POST route
-    assert client.get("/api/public_links").json() == []
-    assert client.post("/api/public_links", json={"url": "https://x.test", "label": "x"}).status_code == 405
+        # append-only resource: POST works with owner, no list/get
+        ev = client.post("/api/events", headers=h1,
+                         json={"kind": "ping", "at": "2026-01-01T00:00:00", "count": 3})
+        assert ev.status_code == 201, ev.text
+        assert ev.json()["owner_id"] == alice_id
+        assert ev.json()["count"] == 3
+        assert client.get("/api/events", headers=h1).status_code == 405
 
-    # append-only resource: POST works with owner, no list/get
-    ev = client.post("/api/events", headers=h1,
-                     json={"kind": "ping", "at": "2026-01-01T00:00:00", "count": 3})
-    assert ev.status_code == 201, ev.text
-    assert ev.json()["owner_id"] == alice_id
-    assert ev.json()["count"] == 3
-    assert client.get("/api/events", headers=h1).status_code == 405
+        # login + refresh flow
+        login = client.post("/api/auth/login", json={"username": "bob", "password": "supersecret2"})
+        assert login.status_code == 200
+        ref = client.post("/api/auth/refresh", json={"refresh_token": login.json()["refresh_token"]})
+        assert ref.status_code == 200
+        assert "access_token" in ref.json()
 
-    # login + refresh flow
-    login = client.post("/api/auth/login", json={"username": "bob", "password": "supersecret2"})
-    assert login.status_code == 200
-    ref = client.post("/api/auth/refresh", json={"refresh_token": login.json()["refresh_token"]})
-    assert ref.status_code == 200
-    assert "access_token" in ref.json()
-
-    # bad login
-    assert client.post("/api/auth/login", json={"username": "bob", "password": "wrong"}).status_code == 401
+        # bad login
+        assert client.post("/api/auth/login", json={"username": "bob", "password": "wrong"}).status_code == 401
 
 
 def test_generated_app_without_auth(tmp_path):
@@ -174,15 +173,15 @@ def test_generated_app_without_auth(tmp_path):
     try:
         import app.main as main_mod  # noqa: PLC0415
 
-        client = TestClient(main_mod.app)
-        r = client.post("/api/pastes", json={"content": "hello world"})
-        assert r.status_code == 201, r.text
-        item = r.json()
-        assert item["content"] == "hello world"
-        assert "owner_id" not in item
-        lst = client.get("/api/pastes").json()
-        assert len(lst) == 1
-        assert client.delete(f"/api/pastes/{item['id']}").status_code == 204
+        with TestClient(main_mod.app) as client:
+            r = client.post("/api/pastes", json={"content": "hello world"})
+            assert r.status_code == 201, r.text
+            item = r.json()
+            assert item["content"] == "hello world"
+            assert "owner_id" not in item
+            lst = client.get("/api/pastes").json()
+            assert len(lst) == 1
+            assert client.delete(f"/api/pastes/{item['id']}").status_code == 204
     finally:
         try:
             sys.path.remove(str(tmp_path))

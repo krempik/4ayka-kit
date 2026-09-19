@@ -39,17 +39,20 @@ def test_window_expires():
     assert rl.allowed("a") is True
 
 
-def test_client_ip_takes_leftmost_forwarded():
+def test_client_ip_ignores_xff_by_default():
     req = SimpleNamespace(
         headers={"x-forwarded-for": "1.2.3.4, 10.0.0.1, 203.0.113.5"},
         client=SimpleNamespace(host="127.0.0.1"),
     )
-    assert _client_ip(req) == "1.2.3.4"
+    # Secure default: do not trust spoofable XFF headers.
+    assert _client_ip(req) == "127.0.0.1"
+    assert _client_ip(req, trust_proxy=True) == "1.2.3.4"
 
 
 def test_client_ip_falls_back_to_socket():
     req = SimpleNamespace(headers={}, client=SimpleNamespace(host="203.0.113.9"))
     assert _client_ip(req) == "203.0.113.9"
+    assert _client_ip(req, trust_proxy=True) == "203.0.113.9"
 
 
 def test_client_ip_ignores_unknown():
@@ -57,4 +60,9 @@ def test_client_ip_ignores_unknown():
         headers={"x-forwarded-for": "unknown, 10.0.0.1"},
         client=SimpleNamespace(host="127.0.0.1"),
     )
-    assert _client_ip(req) == "127.0.0.1"
+    assert _client_ip(req, trust_proxy=True) == "127.0.0.1"
+
+
+def test_limiter_trust_proxy_default_off():
+    assert RateLimiter().trust_proxy is False
+    assert RateLimiter(trust_proxy=True).trust_proxy is True
